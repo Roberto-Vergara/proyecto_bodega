@@ -1,21 +1,34 @@
+import "reflect-metadata";
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
-import cookieParser from "cookie-parser";
 
-import { envConfig } from "./config/env.config.js";
+import { envConfig, ventasSource } from "./config/env.config.js";
 
 import { AppDataSource } from "./modules/shared/infrastructure/database/data-source.js";
 import helmet from "helmet";
+import { errorHandler } from "./modules/shared/infrastructure/http/error-handler.middleware.js";
+import { notFoundHandler } from "./modules/shared/infrastructure/http/not-found.middleware.js";
+import { refreshTokenRepository } from "./modules/shared/infrastructure/container.js";
+
+
+// rutas
+import carroRoutes from "./modules/carros/infrastructure/http/carro.route.js";
+import authRoutes from "./modules/auth/infrastructure/http/auth.route.js";
+import userRoutes from "./modules/users/infrastructure/http/user.route.js";
+import ventaRoutes from "./modules/ventas_log/infrastructure/http/venta.route.js";
 
 const { PORT, HOST,ISPRODUCTION } = envConfig();
 
 const app = express();
 
+// cada 6 horas borramos los refresh tokens vencidos para que la tabla no crezca infinito
+const LIMPIEZA_TOKENS_MS = 6 * 60 * 60 * 1000;
+
 const main = async (): Promise<void> => {
 
     console.log(ISPRODUCTION ? "[SERVER] Modo: PRODUCCIÓN" : "[SERVER] Modo: DESARROLLO");
-    
+
 
     // typeorm, luego tendria configurar en otra parte el odbc
     await AppDataSource.initialize();
@@ -31,7 +44,8 @@ const main = async (): Promise<void> => {
     const origenesPermitidos = new Set(origenesArray);
 
     app.use(cors({
-        credentials: true,
+        // ya no usamos cookies: el token viaja en el header Authorization,
+        // asi que no hace falta credentials:true (y ademas eso choca con origin:*)
         origin(origin, callback) {
             // Peticiones servidor a servidor o herramientas tipo Postman
             if (!origin) {
@@ -56,12 +70,31 @@ const main = async (): Promise<void> => {
     }else{
         app.use(helmet({hsts:false}))
     }
+
+    // necesario para que req.ip sea la IP real del cliente cuando haya un proxy
+    // delante (nginx, etc). El rate limit del login depende de esto
+    app.set("trust proxy", 1);
+
     app.use(express.json({ limit: "100kb" }));
-    app.use(cookieParser());
+
+    // healthcheck, util para monitoreo y para probar rapido desde postman
+    app.get("/health", (_req, res) => {
+        res.status(200).json({ status: "ok", uptime: process.uptime(), ventas_source: ventasSource() });
+    });
 
     // rutas
+    app.use("/carros",carroRoutes);
+    app.use("/auth",authRoutes);
+    app.use("/users",userRoutes);
+    app.use("/ventas",ventaRoutes);
 
+    // ruta inexistente -> 404 en json, no el html feo por defecto de express
+    app.use(notFoundHandler);
 
+    // tiene que ir despues de todas las rutas porque la idea es que si pasa algo salten aqui
+    // el catch las manda con un next a la siguiente funcion y este caso es un middleware
+    // que controla erroes
+    app.use(errorHandler);
 
 
     // server
@@ -69,9 +102,25 @@ const main = async (): Promise<void> => {
         console.log(`[SERVER] funcionando en ${HOST}:${PORT}`);
     });
 
+    // limpieza de refresh tokens vencidos. unref() para que no bloquee el cierre del proceso
+    const limpiarTokens = async (): Promise<void> => {
+        try {
+            const borrados = await refreshTokenRepository.deleteExpired();
+            if (borrados > 0) {
+                console.log(`[AUTH] ${borrados} refresh tokens vencidos eliminados`);
+            }
+        } catch (error) {
+            console.error("[AUTH] Error limpiando refresh tokens:", error);
+        }
+    };
+
+    void limpiarTokens();
+    const intervaloLimpieza = setInterval(() => void limpiarTokens(), LIMPIEZA_TOKENS_MS);
+    intervaloLimpieza.unref();
+
     const apagar = async(senal:string):Promise<void>=>{
         console.log(`\n[SERVER] ${senal} recibido, cerrando procesos`);
-        // aqui se supone que voy a cerrar procesos
+        clearInterval(intervaloLimpieza);
         server.close(async()=>{
             if(AppDataSource.isInitialized){
                 await AppDataSource.destroy();
@@ -79,7 +128,7 @@ const main = async (): Promise<void> => {
             }
             process.exit(0);
         });
-        
+
     }
 
     process.on("SIGINT",()=> void apagar("SIGINT"));

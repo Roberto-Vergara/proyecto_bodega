@@ -1,20 +1,23 @@
-import { Column, CreateDateColumn, Entity, PrimaryColumn, UpdateDateColumn } from "typeorm";
+import { Column, CreateDateColumn, Entity, Index, PrimaryColumn, UpdateDateColumn } from "typeorm";
 import { Area, UserRole } from "../../domain/user.domain.js";
 
 
 
 @Entity("usuarios")
-export class UsuarioEntity{
+export class UserEntity{
     @PrimaryColumn({type:"uuid"})
     id!:string;
 
-    @Column("varchar",{length:30})
+    @Column("varchar",{length:100})
     nombre!:string;
 
-    @Column("varchar",{length:30})
+    @Column("varchar",{length:100})
     apellido!:string;
 
-    @Column("varchar",{length:50})
+    // unico a nivel de base de datos: es la ultima linea de defensa contra emails repetidos
+    // si dos requests entran a la vez, la validacion del caso de uso no alcanza
+    @Index({unique:true})
+    @Column("varchar",{length:150})
     email!:string;
 
     @Column("varchar",{length:256})
@@ -32,8 +35,11 @@ export class UsuarioEntity{
 
 
     @Column({
+        // estaba apuntando a UserRole por copy/paste: la columna area guardaba
+        // los valores del enum equivocado
         type:"enum",
-        enum:UserRole,
+        enum:Area,
+        default:Area.GENERAL
     })
     area!:Area;
 

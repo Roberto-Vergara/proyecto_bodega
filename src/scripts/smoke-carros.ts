@@ -1,0 +1,304 @@
+import "dotenv/config";
+import pg from "pg";
+
+/**
+ * Prueba de humo del flujo de carros, contra el servidor corriendo de verdad.
+ *
+ * Se hace por HTTP y contra el postgres real (y no con repos en memoria) a
+ * proposito: lo que mas puede fallar aca es SQL — el indice unico parcial que
+ * evita filas duplicadas y el SELECT ... FOR UPDATE que evita la
+ * sobre-asignacion. Un doble en memoria no probaria ninguna de las dos cosas.
+ *
+ * Requiere el servidor arriba con VENTAS_SOURCE=fake:
+ *   pnpm dev
+ *   pnpm smoke:carros
+ */
+
+const BASE = process.env.SMOKE_BASE_URL ?? "http://127.0.0.1:3214";
+const EMAIL = process.env.SMOKE_EMAIL ?? "admin@bodega.cl";
+const PASSWORD = process.env.SMOKE_PASSWORD ?? "Admin1234";
+
+// numeros altos para no pisarse con los carros de verdad de la planta
+const CARRO_A = 9001;
+const CARRO_B = 9002;
+const VENTA = 777777;
+const VENTA_OTRA = 888888;
+
+let token = "";
+let fallos = 0;
+
+function check(nombre: string, ok: boolean, extra: unknown = ""): void {
+    console.log(`${ok ? "OK   " : "FALLA"}  ${nombre}`, ok ? "" : JSON.stringify(extra));
+    if (!ok) fallos++;
+}
+
+async function api(
+    metodo: string,
+    ruta: string,
+    body?: unknown,
+): Promise<{ status: number; body: any }> {
+    const res = await fetch(BASE + ruta, {
+        method: metodo,
+        headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
+
+    const texto = await res.text();
+    return { status: res.status, body: texto ? JSON.parse(texto) : null };
+}
+
+/**
+ * Deja la base como si el script nunca hubiera corrido.
+ *
+ * Borra las asignaciones de las dos ventas de prueba en CUALQUIER carro, no
+ * solo en los del script: si no, una corrida anterior (o una prueba a mano)
+ * deja unidades tomadas y el script falla por datos sucios, no por un bug.
+ *
+ * Por eso mismo main() se niega a correr si la fuente no es "fake": contra
+ * DB2 la 777777 es una orden de verdad y esto seria destructivo.
+ */
+async function limpiar(): Promise<void> {
+    const client = new pg.Client({
+        host: process.env.DB_HOST,
+        port: Number(process.env.DB_PORT),
+        user: process.env.DB_USERNAME,
+        password: process.env.DB_PASSWORD,
+        database: process.env.DB_NAME,
+    });
+
+    await client.connect();
+    await client.query(`DELETE FROM carro_items WHERE cod_venta = ANY($1)`, [[VENTA, VENTA_OTRA]]);
+    await client.query(
+        `DELETE FROM carro_items WHERE carro_id IN (SELECT id FROM carros WHERE nro_carro = ANY($1))`,
+        [[CARRO_A, CARRO_B]],
+    );
+    await client.query(`DELETE FROM carros WHERE nro_carro = ANY($1)`, [[CARRO_A, CARRO_B]]);
+
+    // ocupacion es un cache de lo que hay en carro_items, y el DELETE de arriba
+    // es SQL crudo: se salta sincronizarOcupacion(). Si no lo arreglamos aca,
+    // dejamos carros marcados EN_USO sin un solo vidrio adentro
+    // postgres no convierte text a enum solo: hay que castear
+    await client.query(`
+        UPDATE carros c SET
+            ocupacion = (CASE WHEN EXISTS (
+                SELECT 1 FROM carro_items ci
+                WHERE ci.carro_id = c.id AND ci.despachado_en IS NULL
+            ) THEN 'en_uso' ELSE 'vacio' END)::carros_ocupacion_enum,
+            estado_carro = (CASE
+                WHEN c.estado_carro = 'lleno' AND NOT EXISTS (
+                    SELECT 1 FROM carro_items ci
+                    WHERE ci.carro_id = c.id AND ci.despachado_en IS NULL
+                ) THEN 'disponible'
+                ELSE c.estado_carro::text END)::carros_estado_carro_enum
+    `);
+
+    await client.end();
+}
+
+async function main(): Promise<void> {
+    // freno de mano: este script borra datos de las ventas de prueba
+    const salud = await api("GET", "/health");
+
+    if (salud.status !== 200) {
+        throw new Error(`El servidor no responde en ${BASE}. Levantalo con: pnpm dev`);
+    }
+
+    if (salud.body?.ventas_source !== "fake") {
+        throw new Error(
+            "Este script borra las asignaciones de las ventas 777777 y 888888, que contra DB2 son " +
+            "ordenes reales. Levanta el servidor con VENTAS_SOURCE=fake para poder correrlo.",
+        );
+    }
+
+    await limpiar();
+
+    const login = await api("POST", "/auth/login", { email: EMAIL, password: PASSWORD });
+
+    if (login.status !== 200) {
+        throw new Error(`No se pudo iniciar sesion como ${EMAIL}: ${JSON.stringify(login.body)}`);
+    }
+
+    token = login.body.accessToken;
+
+    const a = await api("POST", "/carros", { nro_carro: CARRO_A, ubicacion_carro: "corte" });
+    const b = await api("POST", "/carros", { nro_carro: CARRO_B, ubicacion_carro: "corte" });
+    check("se crean los dos carros", a.status === 201 && b.status === 201, [a.body, b.body]);
+
+    const idA = a.body.carro_id as string;
+    const idB = b.body.carro_id as string;
+
+    // ---- el escenario de planta ----
+
+    let r = await api("POST", `/carros/${idA}/items`, {
+        codVenta: VENTA,
+        items: [
+            { nroItem: 1, cantidad: 17 },
+            { nroItem: 2, cantidad: 17 },
+            { nroItem: 3, cantidad: 10 },
+        ],
+    });
+    check("carro A recibe items 1, 2 y parte del 3", r.status === 201, r.body);
+    check("carro A queda con 44 piezas", r.body?.total_piezas_cargadas === 44, r.body);
+
+    r = await api("POST", `/carros/${idB}/items`, {
+        codVenta: VENTA,
+        items: [{ nroItem: 3, cantidad: 4 }],
+    });
+    check("el item 3 se parte: 4 unidades al carro B", r.status === 201, r.body);
+
+    r = await api("POST", `/carros/${idB}/items`, {
+        codVenta: VENTA_OTRA,
+        items: [{ nroItem: 1, cantidad: 25 }],
+    });
+    check("un carro puede llevar dos ventas distintas", r.status === 201, r.body);
+    check("carro B queda con 29 piezas", r.body?.total_piezas_cargadas === 29, r.body);
+
+    // ---- la invariante ----
+
+    r = await api("POST", `/carros/${idA}/items`, {
+        codVenta: VENTA,
+        items: [{ nroItem: 3, cantidad: 25 }],
+    });
+    check("no se puede pasar de lo vendido (quedan 20, se piden 25)", r.status === 409, r.body);
+
+    r = await api("POST", `/carros/${idA}/items`, {
+        codVenta: VENTA,
+        items: [{ nroItem: 99, cantidad: 1 }],
+    });
+    check("item que no existe en la venta", r.status === 404, r.body);
+
+    r = await api("POST", `/carros/${idA}/items`, {
+        codVenta: VENTA,
+        items: [{ nroItem: 4, cantidad: 0 }],
+    });
+    check("cantidad cero", r.status === 400, r.body);
+
+    // ---- contenido del carro ----
+
+    r = await api("GET", `/carros/${idA}`);
+    const item3EnA = r.body.contenido.find((c: any) => c.nro_item === 3);
+    check("items completos salen como COMPLETO_EN_CARRO",
+        r.body.contenido.filter((c: any) => c.estado_item === "COMPLETO_EN_CARRO").length === 2, r.body);
+    check("el item repartido sale como PARCIAL", item3EnA?.estado_item === "PARCIAL", item3EnA);
+
+    r = await api("GET", `/carros/${idB}`);
+    check("el carro B muestra el cliente de cada venta",
+        new Set(r.body.contenido.map((c: any) => c.nom_cliente)).size === 2, r.body.contenido);
+
+    // ---- mover: fusion ----
+
+    const idItem3EnB = (await api("GET", `/carros/${idB}`)).body.contenido
+        .find((c: any) => c.cod_venta === VENTA && c.nro_item === 3).item_id;
+
+    r = await api("POST", `/carros/${idB}/items/${idItem3EnB}/mover`, { carroDestinoId: idA });
+    check("mover el item completo al otro carro", r.status === 200, r.body);
+
+    r = await api("GET", `/carros/${idA}`);
+    const item3Fusionado = r.body.contenido.filter((c: any) => c.cod_venta === VENTA && c.nro_item === 3);
+    check("las dos filas del mismo item se fusionan en una", item3Fusionado.length === 1, item3Fusionado);
+    check("la fila fusionada suma 14 (10 + 4)",
+        item3Fusionado[0]?.cantidad_en_este_carro === 14, item3Fusionado);
+
+    // ---- mover: split ----
+
+    r = await api("POST", `/carros/${idA}/items/${item3Fusionado[0].item_id}/mover`, {
+        carroDestinoId: idB,
+        cantidad: 5,
+    });
+    check("mover solo una parte parte la fila en dos", r.status === 200, r.body);
+
+    r = await api("GET", `/carros/${idA}`);
+    check("en el origen quedan 9",
+        r.body.contenido.find((c: any) => c.nro_item === 3 && c.cod_venta === VENTA)
+            ?.cantidad_en_este_carro === 9, r.body.contenido);
+
+    // ---- quitar ----
+
+    const idItem1 = (await api("GET", `/carros/${idA}`)).body.contenido
+        .find((c: any) => c.nro_item === 1).item_id;
+
+    r = await api("DELETE", `/carros/${idA}/items/${idItem1}?cantidad=7`);
+    check("quitar una parte deja el resto", r.body?.quedan_en_el_carro === 10, r.body);
+
+    r = await api("DELETE", `/carros/${idA}/items/${idItem1}`);
+    check("quitar el resto elimina la linea", r.body?.quedan_en_el_carro === 0, r.body);
+
+    r = await api("GET", `/ventas/${VENTA}`);
+    check("lo quitado vuelve a estar disponible en la venta",
+        r.body.items.find((i: any) => i.nro_item === 1)?.disponible === 17, r.body.items);
+
+    // ---- concurrencia: el SELECT ... FOR UPDATE ----
+    // dos operarios pidiendo al mismo tiempo TODO lo que queda del item 4.
+    // sin el lock los dos leerian "quedan 17" y se asignarian 34 en total
+    const [c1, c2] = await Promise.all([
+        api("POST", `/carros/${idA}/items`, { codVenta: VENTA, items: [{ nroItem: 4, cantidad: 17 }] }),
+        api("POST", `/carros/${idB}/items`, { codVenta: VENTA, items: [{ nroItem: 4, cantidad: 17 }] }),
+    ]);
+
+    const exitos = [c1, c2].filter((x) => x.status === 201).length;
+    const rechazos = [c1, c2].filter((x) => x.status === 409).length;
+    check("con dos cargas simultaneas solo una gana", exitos === 1 && rechazos === 1,
+        [c1.status, c2.status, c1.body, c2.body]);
+
+    r = await api("GET", `/ventas/${VENTA}`);
+    const item4 = r.body.items.find((i: any) => i.nro_item === 4);
+    check("el item 4 nunca queda sobre-asignado",
+        item4?.cantidad_asignada === 17 && item4?.disponible === 0, item4);
+
+    // ---- estado del carro ----
+
+    r = await api("PATCH", `/carros/${idA}`, { estado_carro: "lleno" });
+    check("el operario marca el carro como lleno", r.body?.estado_carro === "lleno", r.body);
+
+    r = await api("POST", `/carros/${idA}/items`, { codVenta: VENTA, items: [{ nroItem: 2, cantidad: 1 }] });
+    check("un carro lleno no acepta mas vidrios", r.status === 409, r.body);
+
+    await api("PATCH", `/carros/${idA}`, { estado_carro: "disponible" });
+
+    // ---- despacho ----
+
+    r = await api("GET", `/ventas/${VENTA}/distribucion`);
+    check("la distribucion lista los carros de la venta", r.status === 200 && r.body.carros.length === 2, r.body);
+
+    r = await api("POST", `/ventas/${VENTA}/despachar`);
+    check("se despacha la venta", r.status === 200 && r.body.items_despachados > 0, r.body);
+
+    r = await api("POST", `/ventas/${VENTA}/despachar`);
+    check("no se puede despachar dos veces", r.status === 409, r.body);
+
+    r = await api("GET", `/carros/${idA}`);
+    check("el carro que quedo sin nada vuelve a VACIO",
+        r.body.ocupacion === "vacio" && r.body.total_piezas_cargadas === 0, r.body);
+
+    r = await api("GET", `/carros/${idB}`);
+    check("el otro carro conserva la venta que no se despacho",
+        r.body.total_piezas_cargadas === 25, r.body);
+
+    r = await api("GET", `/ventas/${VENTA}`);
+    check("despues del despacho la venta vuelve a estar toda disponible",
+        r.body.items.every((i: any) => i.cantidad_asignada === 0), r.body.items);
+
+    // ...pero no en silencio: se avisa que ya salio de la planta
+    check("la venta despachada queda marcada",
+        r.body.ya_despachada === true && r.body.piezas_despachadas > 0 && r.body.ultimo_despacho !== null,
+        { ya: r.body.ya_despachada, piezas: r.body.piezas_despachadas, ult: r.body.ultimo_despacho });
+    check("y sale un aviso para que no la carguen de nuevo por error",
+        r.body.avisos.some((a: string) => a.includes("despachadas")), r.body.avisos);
+
+    r = await api("GET", `/ventas/${VENTA_OTRA}`);
+    check("una venta nunca despachada no lleva aviso",
+        r.body.ya_despachada === false && r.body.avisos.length === 0, r.body.avisos);
+
+    await limpiar();
+
+    console.log(fallos === 0 ? "\nTODO OK" : `\n${fallos} FALLAS`);
+    process.exit(fallos === 0 ? 0 : 1);
+}
+
+main().catch((error: unknown) => {
+    console.error("[SMOKE ERROR]", error);
+    process.exit(1);
+});

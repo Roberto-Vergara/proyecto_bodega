@@ -2,7 +2,7 @@ import type { IEncrypt } from "../domain/encrypt.port.js";
 import bcrypt from "bcrypt";
 
 
-export class BcryptEncrypr implements IEncrypt{
+export class BcryptEncrypt implements IEncrypt{
     hash(plainText: string): Promise<string> {
         return bcrypt.hash(plainText,10)
     }

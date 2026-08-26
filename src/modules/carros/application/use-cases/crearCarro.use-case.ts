@@ -1,3 +1,4 @@
+import { ConflictError } from "../../../shared/domain/errors.js";
 import type { IIdGenPort } from "../../../shared/domain/idGen.port.js";
 import { Carro, type UbicacionCarro } from "../../domain/carro.domain.js";
 import type { ICarroRepository } from "../../domain/carro.repository.js";
@@ -18,7 +19,7 @@ export class CrearCarroUseCase{
         const carroExiste = await this.carroRepository.findByNumero(input.nro_carro);
 
         if(carroExiste){
-            throw new Error(`Ya existe un carro con el numero ${input.nro_carro}`);
+            throw new ConflictError(`Ya existe un carro con el numero ${input.nro_carro}`);
         }
 
         const id = this.idGen.generate();

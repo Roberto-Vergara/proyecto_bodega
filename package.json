@@ -2,10 +2,15 @@
   "name": "backend",
   "version": "1.0.0",
   "description": "",
-  "main": "index.js",
+  "main": "dist/main.js",
   "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "seed:admin": "tsx src/scripts/seed-admin.ts",
+    "smoke:carros": "tsx src/scripts/smoke-carros.ts"
   },
   "keywords": [],
   "author": "",
@@ -14,7 +19,6 @@
   "dependencies": {
     "@types/helmet": "^4.0.0",
     "bcrypt": "^6.0.0",
-    "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dotenv": "^16.6.1",
     "exceljs": "^4.4.0",
@@ -29,11 +33,13 @@
   },
   "devDependencies": {
     "@types/bcrypt": "^6.0.0",
-    "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.19",
     "@types/express": "^4.17.25",
     "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^26.2.0",
-    "@types/uuid": "^11.0.0"
+    "@types/pg": "^8.23.1",
+    "@types/uuid": "^11.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
   }
 }
