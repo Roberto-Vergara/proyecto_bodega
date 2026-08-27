@@ -1,3 +1,5 @@
+import { ValidationError } from "../../../shared/domain/errors.js";
+
 
 const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
 
@@ -10,17 +12,17 @@ export class EmailVO {
 
     static create(raw: string): EmailVO {
         if (typeof raw !== "string" || raw.trim() === "") {
-            throw new Error("El correo es obligatorio");
+            throw new ValidationError("El correo es obligatorio");
         }
 
         const normalizado = raw.trim().toLowerCase();
 
         if (normalizado.length > 150) {
-            throw new Error("El correo no puede superar los 150 caracteres");
+            throw new ValidationError("El correo no puede superar los 150 caracteres");
         }
 
         if (!EMAIL_REGEX.test(normalizado)) {
-            throw new Error("El correo electrónico no tiene un formato válido");
+            throw new ValidationError("El correo electrónico no tiene un formato válido");
         }
 
         return new EmailVO(normalizado);

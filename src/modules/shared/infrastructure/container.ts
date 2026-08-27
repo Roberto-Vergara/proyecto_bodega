@@ -11,7 +11,10 @@ import { LogoutAllUseCase } from "../../auth/application/use-case/logout-all.use
 import { RefreshTokenUseCase } from "../../auth/application/use-case/refresh-token.use-case.js";
 import { RefreshTokenRepositoryImpl } from "../../auth/infrastructure/persistence/refresh-token.repository.impl.js";
 
+import { ActivarUserUseCase } from "../../users/application/use-cases/activarUser.use-case.js";
+import { CambiarPasswordUseCase } from "../../users/application/use-cases/cambiarPassword.use-case.js";
 import { CreateUserUseCase } from "../../users/application/use-cases/createUser.use-case.js";
+import { ResetearPasswordUseCase } from "../../users/application/use-cases/resetearPassword.use-case.js";
 import { DesactivareUserUserCase } from "../../users/application/use-cases/desactivateUser.use-case.js";
 import { FindUserByIdUseCase } from "../../users/application/use-cases/findUserById.use-case.js";
 import { GetAllUsersUseCase } from "../../users/application/use-cases/getAllUsers.use-case.js";
@@ -21,16 +24,21 @@ import { UserRepositoryImpl } from "../../users/infrastructure/persistence/user.
 import { ActualizarCarroUseCase } from "../../carros/application/use-cases/actualizarCarro.use-case.js";
 import { CrearCarroUseCase } from "../../carros/application/use-cases/crearCarro.use-case.js";
 import { ListarCarrosUseCase } from "../../carros/application/use-cases/listarCarros.use-case.js";
+import { ReconciliarOcupacionesUseCase } from "../../carros/application/use-cases/reconciliarOcupaciones.use-case.js";
 import { ObtenerContenidoCarroUseCase } from "../../carros/application/use-cases/obtenerContenidoCarro.use-case.js";
 import { CarroRepositoryImpl } from "../../carros/infrastructure/persistence/carro.repository.impl.js";
 
 import { AsignarItemsACarroUseCase } from "../../carro_items/application/use-cases/asignarItemsACarro.use-case.js";
 import { DespacharVentaUseCase } from "../../carro_items/application/use-cases/despacharVenta.use-case.js";
+import { VaciarCarroUseCase } from "../../carro_items/application/use-cases/vaciarCarro.use-case.js";
 import { MoverItemsEntreCarrosUseCase } from "../../carro_items/application/use-cases/moverItemsEntreCarros.use-case.js";
 import { QuitarItemsDeCarroUseCase } from "../../carro_items/application/use-cases/quitarItemsDeCarro.use-case.js";
 import { CarroItemRepositoryImpl } from "../../carro_items/infrastructure/persistence/carro-item.repository.impl.js";
 
+import { ListarMovimientosUseCase } from "../../movimientos/application/use-cases/listarMovimientos.use-case.js";
+import { MovimientoRepositoryImpl } from "../../movimientos/infrastructure/persistence/movimiento.repository.impl.js";
 import { BuscarVentaUseCase } from "../../ventas_log/application/use-cases/buscarVenta.use-case.js";
+import { ListarVentasEnProcesoUseCase } from "../../ventas_log/application/use-cases/listarVentasEnProceso.use-case.js";
 import { ObtenerDistribucionVentaUseCase } from "../../ventas_log/application/use-cases/obtenerDistribucionVenta.use-case.js";
 import type { IVentaExternaPort } from "../../ventas_log/domain/venta-externa.port.js";
 import { Db2VentaAdapter } from "../../ventas_log/infrastructure/external/db2-venta.adapter.js";
@@ -64,6 +72,7 @@ export const refreshTokenRepository = new RefreshTokenRepositoryImpl();
 export const carroRepository = new CarroRepositoryImpl();
 export const carroItemRepository = new CarroItemRepositoryImpl();
 export const ventaLogRepository = new VentaLogRepositoryImpl();
+export const movimientoRepository = new MovimientoRepositoryImpl();
 
 // --- transacciones ---
 export const unitOfWork = new TypeOrmUnitOfWork();
@@ -88,16 +97,31 @@ export const getAllUsersUseCase = new GetAllUsersUseCase(userRepository);
 export const findUserByIdUseCase = new FindUserByIdUseCase(userRepository);
 export const updateUserUseCase = new UpdateUserUseCase(userRepository);
 export const desactivarUserUseCase = new DesactivareUserUserCase(userRepository);
+export const activarUserUseCase = new ActivarUserUseCase(userRepository);
+export const cambiarPasswordUseCase = new CambiarPasswordUseCase(
+    userRepository,
+    passwordHasher,
+    refreshTokenRepository,
+);
+export const resetearPasswordUseCase = new ResetearPasswordUseCase(
+    userRepository,
+    passwordHasher,
+    refreshTokenRepository,
+);
 
 // --- casos de uso: carros ---
-export const crearCarroUseCase = new CrearCarroUseCase(carroRepository, idGen);
+export const crearCarroUseCase = new CrearCarroUseCase(unitOfWork, idGen);
 export const obtenerContenidoCarroUseCase = new ObtenerContenidoCarroUseCase(
     carroRepository,
     carroItemRepository,
     ventaLogRepository,
 );
 export const listarCarrosUseCase = new ListarCarrosUseCase(carroRepository, carroItemRepository);
-export const actualizarCarroUseCase = new ActualizarCarroUseCase(carroRepository);
+export const actualizarCarroUseCase = new ActualizarCarroUseCase(unitOfWork, idGen);
+export const reconciliarOcupacionesUseCase = new ReconciliarOcupacionesUseCase(
+    carroRepository,
+    carroItemRepository,
+);
 
 // --- casos de uso: carro_items ---
 export const asignarItemsACarroUseCase = new AsignarItemsACarroUseCase(
@@ -107,8 +131,15 @@ export const asignarItemsACarroUseCase = new AsignarItemsACarroUseCase(
     idGen,
 );
 export const moverItemsEntreCarrosUseCase = new MoverItemsEntreCarrosUseCase(unitOfWork, idGen);
-export const quitarItemsDeCarroUseCase = new QuitarItemsDeCarroUseCase(unitOfWork);
-export const despacharVentaUseCase = new DespacharVentaUseCase(unitOfWork);
+export const quitarItemsDeCarroUseCase = new QuitarItemsDeCarroUseCase(unitOfWork, idGen);
+export const vaciarCarroUseCase = new VaciarCarroUseCase(unitOfWork, idGen);
+export const despacharVentaUseCase = new DespacharVentaUseCase(unitOfWork, idGen);
+
+// --- casos de uso: movimientos (la bitacora) ---
+export const listarMovimientosUseCase = new ListarMovimientosUseCase(
+    movimientoRepository,
+    userRepository,
+);
 
 // --- casos de uso: ventas ---
 export const buscarVentaUseCase = new BuscarVentaUseCase(
@@ -118,6 +149,10 @@ export const buscarVentaUseCase = new BuscarVentaUseCase(
     idGen,
 );
 export const obtenerDistribucionVentaUseCase = new ObtenerDistribucionVentaUseCase(
+    carroItemRepository,
+    ventaLogRepository,
+);
+export const listarVentasEnProcesoUseCase = new ListarVentasEnProcesoUseCase(
     carroItemRepository,
     ventaLogRepository,
 );

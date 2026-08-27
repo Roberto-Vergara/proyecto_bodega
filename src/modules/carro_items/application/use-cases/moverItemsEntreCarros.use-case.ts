@@ -1,6 +1,8 @@
 import { ConflictError, NotFoundError, ValidationError } from "../../../shared/domain/errors.js";
 import type { IIdGenPort } from "../../../shared/domain/idGen.port.js";
 import type { IUnitOfWorkRunner } from "../../../shared/domain/unit-of-work.port.js";
+import { LoteMovimientos } from "../../../movimientos/application/service/lote-movimientos.js";
+import { Movimiento } from "../../../movimientos/domain/movimiento.domain.js";
 import { CarroItem } from "../../domain/carro-item.domain.js";
 import { sincronizarOcupacion } from "../service/sincronizar-ocupacion.js";
 
@@ -13,6 +15,7 @@ export interface MoverItemsInput{
      * item en el carro de origen.
      */
     cantidad?:number;
+    usuarioId:string|null;
 }
 
 export interface MoverItemsOutput{
@@ -84,6 +87,15 @@ export class MoverItemsEntreCarrosUseCase{
             }
 
             const carroOrigenId = origen.carroId;
+
+            // hace falta el nro del carro de origen para que la bitacora se
+            // lea sola, sin tener que ir a buscar el carro despues
+            const carroOrigen = await uow.carros.findById(carroOrigenId);
+
+            if(!carroOrigen){
+                throw new NotFoundError(`No existe el carro ${carroOrigenId}`);
+            }
+
             const esMovimientoCompleto = cantidad === origen.cantidadAsignada;
 
             // el destino puede tener ya una fila activa del mismo item:
@@ -135,6 +147,28 @@ export class MoverItemsEntreCarrosUseCase{
                 await uow.carroItems.save(nueva);
                 itemIdDestino = nueva.id;
             }
+
+            const lote = new LoteMovimientos(this.idGen, input.usuarioId);
+
+            await uow.movimientos.registrar(Movimiento.movimiento(
+                lote.ctx(),
+                {id:carroOrigen.id, nroCarro:carroOrigen.nroCarro},
+                {id:carroDestino.id, nroCarro:carroDestino.nroCarro},
+                {
+                    codVenta: origen.codVenta,
+                    nroItem: origen.nroItem,
+                    codItem: origen.codItem,
+                    cantidad,
+                },
+                {
+                    marca_pieza: origen.marcaPieza,
+                    dimensiones: origen.dimensiones(),
+                    movimiento_completo: esMovimientoCompleto,
+                    // true si en el destino ya habia una fila del mismo item
+                    // y se fusionaron en una sola
+                    fusionado: existenteEnDestino !== null,
+                },
+            ));
 
             await sincronizarOcupacion(uow, carroOrigenId);
             await sincronizarOcupacion(uow, input.carroDestinoId);

@@ -14,6 +14,13 @@ export interface AuthUserDto{
     email:string;
     role:string;
     area:string;
+    /**
+     * true cuando el usuario sigue usando la clave que le puso el admin.
+     *
+     * El cliente (app movil o dashboard) tiene que mandarlo a la pantalla de
+     * cambio de clave antes de dejarlo operar.
+     */
+    primera_password:boolean;
 }
 
 export interface TokenPairDto{

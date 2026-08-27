@@ -6,6 +6,7 @@ import type { ItemAAsignarDto } from "../../../carro_items/application/dto/asign
 import type { CrearCarroUseCase } from "../../application/use-cases/crearCarro.use-case.js";
 import type { MoverItemsEntreCarrosUseCase } from "../../../carro_items/application/use-cases/moverItemsEntreCarros.use-case.js";
 import type { QuitarItemsDeCarroUseCase } from "../../../carro_items/application/use-cases/quitarItemsDeCarro.use-case.js";
+import type { VaciarCarroUseCase } from "../../../carro_items/application/use-cases/vaciarCarro.use-case.js";
 import type { ActualizarCarroUseCase } from "../../application/use-cases/actualizarCarro.use-case.js";
 import type { ListarCarrosUseCase } from "../../application/use-cases/listarCarros.use-case.js";
 import type { ObtenerContenidoCarroUseCase } from "../../application/use-cases/obtenerContenidoCarro.use-case.js";
@@ -82,7 +83,27 @@ export class CarroController{
         private readonly quitarItemsDeCarroUseCase:QuitarItemsDeCarroUseCase,
         private readonly listarCarrosUseCase:ListarCarrosUseCase,
         private readonly actualizarCarroUseCase:ActualizarCarroUseCase,
+        private readonly vaciarCarroUseCase:VaciarCarroUseCase,
     ){}
+
+    // saca TODO de un carro y devuelve lo que habia adentro, para que el
+    // operario sepa que quedo en sus manos
+    vaciar=async(req:Request,res:Response,next:NextFunction):Promise<void>=>{
+        try {
+            const body = (req.body ?? {}) as Record<string,unknown>;
+            const motivo = typeof body["motivo"] === "string" ? body["motivo"].trim() : "";
+
+            const resultado = await this.vaciarCarroUseCase.execute({
+                carroId: leerIdCarro(req),
+                usuarioId: req.user?.userId ?? null,
+                ...(motivo !== "" && { motivo }),
+            });
+
+            res.status(200).json(resultado);
+        } catch (error) {
+            next(error);
+        }
+    };
 
     listar=async(req:Request,res:Response,next:NextFunction):Promise<void>=>{
         try {
@@ -118,6 +139,7 @@ export class CarroController{
 
             const carro = await this.actualizarCarroUseCase.execute({
                 carroId: leerIdCarro(req),
+                usuarioId: req.user?.userId ?? null,
                 ...(estado !== undefined && { estado: estado as EstadoCarro }),
                 ...(ubicacion !== undefined && { ubicacion: ubicacion as UbicacionCarro }),
             });
@@ -146,7 +168,7 @@ export class CarroController{
             const carro = await this.crearCarroUseCase.execute({
                 nro_carro,
                 ubicacion_carro: ubicacion_carro as UbicacionCarro,
-            });
+            }, req.user?.userId ?? null);
 
             res.status(201).json(aRespuestaCarro(carro));
         } catch (error) {
@@ -206,6 +228,7 @@ export class CarroController{
             const resultado = await this.moverItemsEntreCarrosUseCase.execute({
                 carroItemId: leerCarroItemId(req),
                 carroDestinoId,
+                usuarioId: req.user?.userId ?? null,
                 ...(cantidad !== undefined && { cantidad }),
             });
 
@@ -218,9 +241,14 @@ export class CarroController{
     quitarItems=async(req:Request,res:Response,next:NextFunction):Promise<void>=>{
         try {
             const cantidad = leerCantidadOpcional(req.query["cantidad"]);
+            // ?motivo= queda guardado en la bitacora (vidrio roto, error de carga...)
+            const motivoRaw = req.query["motivo"];
+            const motivo = typeof motivoRaw === "string" ? motivoRaw.trim() : "";
 
             const resultado = await this.quitarItemsDeCarroUseCase.execute({
                 carroItemId: leerCarroItemId(req),
+                usuarioId: req.user?.userId ?? null,
+                ...(motivo !== "" && { motivo }),
                 ...(cantidad !== undefined && { cantidad }),
             });
 

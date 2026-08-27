@@ -1,4 +1,7 @@
 import { ConflictError } from "../../../shared/domain/errors.js";
+import type { IIdGenPort } from "../../../shared/domain/idGen.port.js";
+import { LoteMovimientos } from "../../../movimientos/application/service/lote-movimientos.js";
+import { Movimiento } from "../../../movimientos/domain/movimiento.domain.js";
 import type { IUnitOfWorkRunner } from "../../../shared/domain/unit-of-work.port.js";
 import { sincronizarOcupacion } from "../service/sincronizar-ocupacion.js";
 
@@ -21,17 +24,49 @@ export interface DespacharVentaOutput{
  * se destildan solos).
  */
 export class DespacharVentaUseCase{
-    constructor(private readonly uow:IUnitOfWorkRunner){}
+    constructor(
+        private readonly uow:IUnitOfWorkRunner,
+        private readonly idGen:IIdGenPort,
+    ){}
 
-    async execute(codVenta:number):Promise<DespacharVentaOutput>{
+    async execute(codVenta:number, usuarioId:string|null = null):Promise<DespacharVentaOutput>{
         return this.uow.run(async (uow)=>{
-            const { carrosAfectados, itemsDespachados } = await uow.carroItems.despacharVenta(codVenta);
+            // se leen ANTES del update: despues de despachar ya no figuran
+            // como activos y no habria con que armar la bitacora
+            const activos = await uow.carroItems.findActivosPorVenta(codVenta);
 
-            if(itemsDespachados === 0){
+            if(activos.length === 0){
                 throw new ConflictError(
                     `La venta ${codVenta} no tiene vidrios cargados en ningun carro`,
                 );
             }
+
+            // el nro de cada carro, para que el log se lea sin joins
+            const nrosPorCarro = new Map<string,number>();
+
+            for(const carroId of new Set(activos.map((item)=>item.carroId))){
+                const carro = await uow.carros.findById(carroId);
+                if(carro) nrosPorCarro.set(carroId, carro.nroCarro);
+            }
+
+            const { carrosAfectados, itemsDespachados } = await uow.carroItems.despacharVenta(codVenta);
+
+            const lote = new LoteMovimientos(this.idGen, usuarioId);
+
+            await uow.movimientos.registrarMuchos(activos.map((item)=>Movimiento.despacho(
+                lote.ctx(),
+                {id:item.carroId, nroCarro:nrosPorCarro.get(item.carroId) ?? 0},
+                {
+                    codVenta: item.codVenta,
+                    nroItem: item.nroItem,
+                    codItem: item.codItem,
+                    cantidad: item.cantidadAsignada,
+                },
+                {
+                    marca_pieza: item.marcaPieza,
+                    dimensiones: item.dimensiones(),
+                },
+            )));
 
             const carrosLiberados:DespacharVentaOutput["carros_liberados"] = [];
 

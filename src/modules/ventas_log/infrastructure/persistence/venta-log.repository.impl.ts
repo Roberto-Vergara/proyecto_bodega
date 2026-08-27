@@ -5,6 +5,9 @@ import { VentaLog } from "../../domain/venta-log.domain.js";
 import type { IVentaLogRepository } from "../../domain/venta-log.repository.js";
 import { VentasLogEntity } from "./ventas_log.entity.js";
 
+// SQL Server: violacion de indice unico / clave primaria
+const ERROR_CLAVE_DUPLICADA = [2601, 2627];
+
 
 export class VentaLogRepositoryImpl implements IVentaLogRepository{
 
@@ -16,26 +19,47 @@ export class VentaLogRepositoryImpl implements IVentaLogRepository{
             : AppDataSource.getRepository(VentasLogEntity);
     }
 
+    /**
+     * Upsert por cod_venta.
+     *
+     * Se hace a mano porque repository.upsert() de TypeORM no esta soportado
+     * en SQL Server (usa ON CONFLICT / ON DUPLICATE KEY, que son de postgres y
+     * mysql). Aca: primero UPDATE, y si no toco ninguna fila, INSERT.
+     *
+     * Si dos requests espejan la misma venta por primera vez al mismo tiempo,
+     * los dos ven 0 filas actualizadas y los dos intentan insertar: uno choca
+     * con el indice unico. Ese caso se atrapa y se resuelve como update.
+     */
     async save(venta: VentaLog): Promise<void> {
-        // upsert por cod_venta: si la venta ya estaba espejada se refresca,
-        // si no se inserta. Asi BuscarVenta puede llamarse cuantas veces sea
-        await this.repository.upsert(
-            {
+        const datos = {
+            nom_cliente:venta.nomCliente,
+            rut_cliente:venta.rutCliente,
+            id_vendedor:venta.idVendedor,
+            fecha_orden:venta.fechaOrden,
+            instrucciones:venta.instrucciones,
+            monto_total:venta.montoTotal,
+        };
+
+        const resultado = await this.repository.update({cod_venta:venta.codVenta}, datos);
+
+        if((resultado.affected ?? 0) > 0){
+            return;
+        }
+
+        try {
+            await this.repository.insert({
                 id:venta.id,
                 cod_venta:venta.codVenta,
-                nom_cliente:venta.nomCliente,
-                rut_cliente:venta.rutCliente,
-                id_vendedor:venta.idVendedor,
-                fecha_orden:venta.fechaOrden,
-                instrucciones:venta.instrucciones,
-                monto_total:venta.montoTotal === null ? null : String(venta.montoTotal),
-            },
-            {
-                conflictPaths:["cod_venta"],
-                // no pisamos el id que ya tenia la fila en la base
-                skipUpdateIfNoValuesChanged:false,
-            },
-        );
+                ...datos,
+            });
+        } catch (error) {
+            if(!esClaveDuplicada(error)){
+                throw error;
+            }
+
+            // se nos adelanto otro request: la fila ya existe, la actualizamos
+            await this.repository.update({cod_venta:venta.codVenta}, datos);
+        }
     }
 
     async findByCodVenta(codVenta: number): Promise<VentaLog | null> {
@@ -44,9 +68,10 @@ export class VentaLogRepositoryImpl implements IVentaLogRepository{
     }
 
     async lockByCodVenta(codVenta: number): Promise<VentaLog | null> {
-        // pessimistic_write = SELECT ... FOR UPDATE.
-        // sin transaccion abierta TypeORM lanza error, que es justo lo que
-        // queremos: este metodo NO debe usarse fuera de una unidad de trabajo
+        // en SQL Server esto se traduce a WITH (UPDLOCK, ROWLOCK), que es el
+        // equivalente del SELECT ... FOR UPDATE de postgres.
+        // Solo tiene efecto dentro de una transaccion: este metodo NO debe
+        // usarse fuera de una unidad de trabajo
         const entity = await this.repository.findOne({
             where:{cod_venta:codVenta},
             lock:{mode:"pessimistic_write"},
@@ -62,12 +87,29 @@ export class VentaLogRepositoryImpl implements IVentaLogRepository{
             nomCliente:entity.nom_cliente,
             rutCliente:entity.rut_cliente,
             idVendedor:entity.id_vendedor,
-            // postgres devuelve DATE como string 'YYYY-MM-DD'
+            // el driver de SQL Server devuelve DATE como objeto Date;
+            // el new Date() de mas vale por si algun dia vuelve como string
             fechaOrden:entity.fecha_orden === null ? null : new Date(entity.fecha_orden),
             instrucciones:entity.instrucciones,
-            // numeric siempre vuelve como string desde pg, para no perder precision
+            // tedious devuelve DECIMAL como number, a diferencia de pg que lo
+            // daba como string. El Number() cubre los dos casos
             montoTotal:entity.monto_total === null ? null : Number(entity.monto_total),
             ultimaConsulta:entity.ultima_consulta,
         });
     }
+}
+
+
+function esClaveDuplicada(error:unknown):boolean{
+    if(typeof error !== "object" || error === null) return false;
+
+    // TypeORM envuelve el error del driver: el numero puede venir en la raiz
+    // o adentro de driverError
+    const posibles = [error, (error as {driverError?:unknown}).driverError];
+
+    return posibles.some((e)=>{
+        if(typeof e !== "object" || e === null) return false;
+        const numero = (e as {number?:unknown}).number;
+        return typeof numero === "number" && ERROR_CLAVE_DUPLICADA.includes(numero);
+    });
 }

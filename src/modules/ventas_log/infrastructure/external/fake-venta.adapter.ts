@@ -41,6 +41,44 @@ const VENTAS: VentaExterna[] = [
             { nroItem: 1, codItem: "LAM10.10", dim1: 1200, dim2: 800, dim3: 0, cantidad: 25, marcaPieza: "VENTANA-A1" },
         ],
     },
+
+    // --------------------------------------------------------------------
+    // Ventas EXCLUSIVAS del script de humo (pnpm smoke:carros).
+    //
+    // Existen aparte porque el script borra las asignaciones de las ventas
+    // que usa en TODOS los carros, para poder correr limpio siempre. Si
+    // usara la 777777 (que es una nota de venta real y que alguien puede
+    // estar probando a mano), le borraria el trabajo a esa persona.
+    //
+    // Numeros altos y feos a proposito: nadie los va a teclear por error.
+    // --------------------------------------------------------------------
+    {
+        codVenta: 999001,
+        nomCliente: "CLIENTE DE PRUEBA SMOKE",
+        rutCliente: "11111111",
+        idVendedor: "T01",
+        fechaOrden: new Date(Date.UTC(2026, 0, 20)),
+        instrucciones: "SOLO PARA TESTS AUTOMATICOS",
+        montoTotal: 85,
+        items: [
+            { nroItem: 1, codItem: "CRP8.885", dim1: 545, dim2: 375, dim3: 0, cantidad: 17, marcaPieza: "V4-P" },
+            { nroItem: 2, codItem: "CRP8.885", dim1: 595, dim2: 425, dim3: 0, cantidad: 17, marcaPieza: "V4-F" },
+            { nroItem: 3, codItem: "CRP8.885", dim1: 795, dim2: 625, dim3: 0, cantidad: 34, marcaPieza: "V2-F" },
+            { nroItem: 4, codItem: "CRP8.885", dim1: 753, dim2: 612, dim3: 0, cantidad: 17, marcaPieza: "V4-P" },
+        ],
+    },
+    {
+        codVenta: 999002,
+        nomCliente: "OTRO CLIENTE DE PRUEBA SMOKE",
+        rutCliente: "22222222",
+        idVendedor: "T02",
+        fechaOrden: new Date(Date.UTC(2026, 1, 10)),
+        instrucciones: "SOLO PARA TESTS AUTOMATICOS",
+        montoTotal: 25,
+        items: [
+            { nroItem: 1, codItem: "LAM10.10", dim1: 1200, dim2: 800, dim3: 0, cantidad: 25, marcaPieza: "VENTANA-A1" },
+        ],
+    },
 ];
 
 

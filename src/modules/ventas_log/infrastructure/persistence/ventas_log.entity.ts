@@ -4,7 +4,7 @@ import { CarroItemsEntity } from "../../../carro_items/infrastructure/persistenc
 
 @Entity("ventas_log")
 export class VentasLogEntity{
-    @PrimaryColumn({type:"uuid"})
+    @PrimaryColumn({type:"varchar",length:36})
     id!:string;
 
     // unico porque es la llave natural que viene de DB2 (OHORDÑ) y porque
@@ -14,8 +14,9 @@ export class VentasLogEntity{
     cod_venta!:number;
 
     // los largos salen de los tipos reales de FOMHDR:
-    // OHSNME CHAR(30), OHCSTÑ CHAR(8), OHREPÑ CHAR(5), OHSHIN CHAR(40)
-    @Column({type:"varchar",length:30})
+    // OHSNME CHAR(30), OHCSTÑ CHAR(8), OHREPÑ CHAR(5), OHSHIN CHAR(40).
+    // nvarchar donde puede haber tildes o ñ (nombres de cliente, instrucciones)
+    @Column({type:"nvarchar",length:30})
     nom_cliente!:string;
 
     @Column({type:"varchar",length:8,nullable:true})
@@ -29,15 +30,16 @@ export class VentasLogEntity{
     @Column({type:"date",nullable:true})
     fecha_orden!:Date|null;
 
-    @Column({type:"varchar",length:40,nullable:true})
+    @Column({type:"nvarchar",length:40,nullable:true})
     instrucciones!:string|null;
 
     // se espeja pero no se usa en ningun calculo (ver venta-log.domain.ts)
-    @Column({type:"numeric",precision:11,scale:2,nullable:true})
-    monto_total!:string|null;
+    // tedious devuelve DECIMAL como number (pg lo daba como string)
+    @Column({type:"decimal",precision:11,scale:2,nullable:true})
+    monto_total!:number|null;
 
     // cuando fue la ultima vez que sincronizamos contra DB2
-    @UpdateDateColumn({name:"ultima_consulta",type:"timestamp"})
+    @UpdateDateColumn({name:"ultima_consulta",type:"datetime2"})
     ultima_consulta!:Date;
 
     @OneToMany(()=>CarroItemsEntity,(item)=>item.venta)

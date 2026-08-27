@@ -1,6 +1,7 @@
 import { Router } from "express";
 
 import {
+    cambiarPasswordUseCase,
     findUserByIdUseCase,
     loginUseCase,
     logoutAllUseCase,
@@ -20,6 +21,7 @@ const authController = new AuthController(
     logoutUseCase,
     logoutAllUseCase,
     findUserByIdUseCase,
+    cambiarPasswordUseCase,
 );
 
 const requireAuth = authMiddleware(tokenService);
@@ -53,5 +55,7 @@ router.post("/logout", authController.logout);
 // --- protegidas ---
 router.get("/me", requireAuth, authController.me);
 router.post("/logout-all", requireAuth, authController.logoutAll);
+// el propio usuario cambia su clave (pide la actual). Revoca todas las sesiones
+router.post("/cambiar-password", requireAuth, authController.cambiarPassword);
 
 export default router;

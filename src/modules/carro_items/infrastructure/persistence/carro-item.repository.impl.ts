@@ -1,9 +1,18 @@
 import { IsNull, type EntityManager, type Repository } from "typeorm";
 
 import { AppDataSource } from "../../../shared/infrastructure/database/data-source.js";
+import { enTandas, filasPorTanda } from "../../../shared/infrastructure/database/sql-server.limits.js";
 import { CarroItem } from "../../domain/carro-item.domain.js";
-import type { ICarroItemRepository, ResumenDespacho, UbicacionDeItem } from "../../domain/carro-item.repository.js";
+import type {
+    ICarroItemRepository,
+    ResumenDespacho,
+    UbicacionDeItem,
+    VentaEnProceso,
+} from "../../domain/carro-item.repository.js";
 import { CarroItemsEntity } from "./carro_items.entity.js";
+
+// cuantas columnas escribe toEntity(): define cuantas filas caben por INSERT
+const COLUMNAS_CARRO_ITEM = 14;
 
 
 export class CarroItemRepositoryImpl implements ICarroItemRepository{
@@ -22,7 +31,12 @@ export class CarroItemRepositoryImpl implements ICarroItemRepository{
 
     async saveMuchos(items: CarroItem[]): Promise<void> {
         if(items.length === 0) return;
-        await this.repository.save(items.map((item)=>this.toEntity(item)));
+
+        // carro_items tiene 14 columnas: SQL Server 2012 corta a las ~140 filas
+        // por sentencia (limite de 2100 parametros)
+        for(const tanda of enTandas(items, filasPorTanda(COLUMNAS_CARRO_ITEM))){
+            await this.repository.save(tanda.map((item)=>this.toEntity(item)));
+        }
     }
 
     async delete(id: string): Promise<void> {
@@ -100,16 +114,25 @@ export class CarroItemRepositoryImpl implements ICarroItemRepository{
     async totalPiezasPorCarro(carroIds: string[]): Promise<Map<string,number>> {
         if(carroIds.length === 0) return new Map();
 
-        const filas = await this.repository
-            .createQueryBuilder("ci")
-            .select("ci.carro_id","carro_id")
-            .addSelect("COALESCE(SUM(ci.cantidad_asignada), 0)","total")
-            .where("ci.carro_id IN (:...carroIds)",{carroIds})
-            .andWhere("ci.despachado_en IS NULL")
-            .groupBy("ci.carro_id")
-            .getRawMany<{carro_id:string;total:string}>();
+        const totales = new Map<string,number>();
 
-        return new Map(filas.map((f)=>[f.carro_id,Number(f.total)]));
+        // un parametro por id: con muchos carros se pasa de los 2100 de SQL Server
+        for(const tanda of enTandas(carroIds, filasPorTanda(1))){
+            const filas = await this.repository
+                .createQueryBuilder("ci")
+                .select("ci.carro_id","carro_id")
+                .addSelect("COALESCE(SUM(ci.cantidad_asignada), 0)","total")
+                .where("ci.carro_id IN (:...carroIds)",{carroIds:tanda})
+                .andWhere("ci.despachado_en IS NULL")
+                .groupBy("ci.carro_id")
+                .getRawMany<{carro_id:string;total:string}>();
+
+            for(const f of filas){
+                totales.set(f.carro_id, Number(f.total));
+            }
+        }
+
+        return totales;
     }
 
     async distribucionPorVenta(codVenta: number): Promise<Map<number,UbicacionDeItem[]>> {
@@ -141,6 +164,29 @@ export class CarroItemRepositoryImpl implements ICarroItemRepository{
         }
 
         return mapa;
+    }
+
+    async ventasEnProceso(): Promise<VentaEnProceso[]> {
+        const filas = await this.repository
+            .createQueryBuilder("ci")
+            .select("ci.cod_venta","cod_venta")
+            .addSelect("SUM(ci.cantidad_asignada)","piezas")
+            .addSelect("COUNT(*)","lineas")
+            .addSelect("COUNT(DISTINCT ci.carro_id)","carros")
+            .addSelect("MAX(ci.fecha_asignacion)","ultima")
+            .where("ci.despachado_en IS NULL")
+            .groupBy("ci.cod_venta")
+            // lo ultimo que se toco primero: es lo que el operario esta trabajando
+            .orderBy("MAX(ci.fecha_asignacion)","DESC")
+            .getRawMany<{cod_venta:number;piezas:string;lineas:string;carros:string;ultima:Date}>();
+
+        return filas.map((f)=>({
+            codVenta: Number(f.cod_venta),
+            piezasEnCarros: Number(f.piezas),
+            lineas: Number(f.lineas),
+            carros: Number(f.carros),
+            ultimaCarga: f.ultima,
+        }));
     }
 
     async resumenDespachoDeVenta(codVenta: number): Promise<ResumenDespacho> {

@@ -2,7 +2,9 @@ import type { NextFunction, Request, Response } from "express";
 
 import { ForbiddenError, UnauthorizedError, ValidationError } from "../../../shared/domain/errors.js";
 import type { CreateUserUseCase } from "../../application/use-cases/createUser.use-case.js";
+import type { ActivarUserUseCase } from "../../application/use-cases/activarUser.use-case.js";
 import type { DesactivareUserUserCase } from "../../application/use-cases/desactivateUser.use-case.js";
+import type { ResetearPasswordUseCase } from "../../application/use-cases/resetearPassword.use-case.js";
 import type { FindUserByIdUseCase } from "../../application/use-cases/findUserById.use-case.js";
 import type { GetAllUsersUseCase } from "../../application/use-cases/getAllUsers.use-case.js";
 import type { UpdateUserUseCase } from "../../application/use-cases/updateUser.use-case.js";
@@ -19,6 +21,7 @@ function aRespuesta(user:User){
         role:user.role,
         area:user.area,
         isActive:user.isActive,
+        primera_password:user.primeraPassword,
         createdAt:user.createdAt,
         updatedAt:user.updatedAt,
     };
@@ -42,7 +45,40 @@ export class UserController{
         private readonly findUserByIdUseCase:FindUserByIdUseCase,
         private readonly updateUserUseCase:UpdateUserUseCase,
         private readonly desactivarUserUseCase:DesactivareUserUserCase,
+        private readonly activarUserUseCase:ActivarUserUseCase,
+        private readonly resetearPasswordUseCase:ResetearPasswordUseCase,
     ){}
+
+    activar = async(req:Request,res:Response,next:NextFunction):Promise<void>=>{
+        try {
+            await this.activarUserUseCase.execute(leerId(req));
+            res.status(204).send();
+        } catch (error) {
+            next(error);
+        }
+    };
+
+    // el admin le pone una clave temporal a alguien que la olvido.
+    // queda obligado a cambiarla en cuanto entre
+    resetearPassword = async(req:Request,res:Response,next:NextFunction):Promise<void>=>{
+        try {
+            const body = (req.body ?? {}) as Record<string,unknown>;
+            const nueva = body["passwordNueva"] ?? body["password_nueva"];
+
+            if(typeof nueva !== "string"){
+                throw new ValidationError("passwordNueva es obligatoria");
+            }
+
+            await this.resetearPasswordUseCase.execute({
+                usuarioId: leerId(req),
+                passwordNueva: nueva,
+            });
+
+            res.status(204).send();
+        } catch (error) {
+            next(error);
+        }
+    };
 
     crear = async(req:Request,res:Response,next:NextFunction):Promise<void>=>{
         try {

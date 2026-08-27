@@ -1,5 +1,8 @@
 import { ConflictError, NotFoundError, ValidationError } from "../../../shared/domain/errors.js";
+import type { IIdGenPort } from "../../../shared/domain/idGen.port.js";
 import type { IUnitOfWorkRunner } from "../../../shared/domain/unit-of-work.port.js";
+import { LoteMovimientos } from "../../../movimientos/application/service/lote-movimientos.js";
+import { Movimiento } from "../../../movimientos/domain/movimiento.domain.js";
 import { sincronizarOcupacion } from "../service/sincronizar-ocupacion.js";
 
 
@@ -7,6 +10,9 @@ export interface QuitarItemsInput{
     carroItemId:string;
     // si no viene, se saca todo el item del carro
     cantidad?:number;
+    usuarioId:string|null;
+    // queda en la bitacora: por que se saco (vidrio roto, error de carga...)
+    motivo?:string;
 }
 
 export interface QuitarItemsOutput{
@@ -22,11 +28,15 @@ export interface QuitarItemsOutput{
  * Descargar vidrios de un carro.
  *
  * Sacar vidrios los devuelve al pool de "pendientes por cargar" de la venta:
- * no es un despacho, no queda historico. Para cerrar el ciclo de una venta
- * esta DespacharVentaUseCase, que si conserva la trazabilidad.
+ * no es un despacho. La fila de carro_items se borra, pero el movimiento queda
+ * en la bitacora, asi que se puede reconstruir que salio y cuando.
+ * Para cerrar el ciclo de una venta esta DespacharVentaUseCase.
  */
 export class QuitarItemsDeCarroUseCase{
-    constructor(private readonly uow:IUnitOfWorkRunner){}
+    constructor(
+        private readonly uow:IUnitOfWorkRunner,
+        private readonly idGen:IIdGenPort,
+    ){}
 
     async execute(input:QuitarItemsInput):Promise<QuitarItemsOutput>{
         return this.uow.run(async (uow)=>{
@@ -53,6 +63,13 @@ export class QuitarItemsDeCarroUseCase{
             }
 
             const carroId = item.carroId;
+
+            const carro = await uow.carros.findById(carroId);
+
+            if(!carro){
+                throw new NotFoundError(`No existe el carro ${carroId}`);
+            }
+
             let quedan:number;
 
             if(cantidad === item.cantidadAsignada){
@@ -64,6 +81,25 @@ export class QuitarItemsDeCarroUseCase{
                 await uow.carroItems.save(item);
                 quedan = item.cantidadAsignada;
             }
+
+            const lote = new LoteMovimientos(this.idGen, input.usuarioId);
+
+            await uow.movimientos.registrar(Movimiento.descarga(
+                lote.ctx(),
+                {id:carro.id, nroCarro:carro.nroCarro},
+                {
+                    codVenta: item.codVenta,
+                    nroItem: item.nroItem,
+                    codItem: item.codItem,
+                    cantidad,
+                },
+                {
+                    marca_pieza: item.marcaPieza,
+                    dimensiones: item.dimensiones(),
+                    quedan_en_el_carro: quedan,
+                    ...(input.motivo !== undefined && { motivo: input.motivo }),
+                },
+            ));
 
             await sincronizarOcupacion(uow, carroId);
 

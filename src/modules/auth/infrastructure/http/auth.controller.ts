@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 
 import { UnauthorizedError, ValidationError } from "../../../shared/domain/errors.js";
+import type { CambiarPasswordUseCase } from "../../../users/application/use-cases/cambiarPassword.use-case.js";
 import type { FindUserByIdUseCase } from "../../../users/application/use-cases/findUserById.use-case.js";
 import type { LoginUseCase } from "../../application/use-case/login.use-case.js";
 import type { LogoutUseCase } from "../../application/use-case/logout.use-case.js";
@@ -44,7 +45,36 @@ export class AuthController {
         private readonly logoutUseCase: LogoutUseCase,
         private readonly logoutAllUseCase: LogoutAllUseCase,
         private readonly findUserByIdUseCase: FindUserByIdUseCase,
+        private readonly cambiarPasswordUseCase: CambiarPasswordUseCase,
     ) {}
+
+    cambiarPassword = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+        try {
+            if(!req.user){
+                throw new UnauthorizedError();
+            }
+
+            const body = (req.body ?? {}) as Record<string,unknown>;
+            const actual = body["passwordActual"] ?? body["password_actual"];
+            const nueva = body["passwordNueva"] ?? body["password_nueva"];
+
+            if(typeof actual !== "string" || typeof nueva !== "string"){
+                throw new ValidationError("passwordActual y passwordNueva son obligatorios");
+            }
+
+            await this.cambiarPasswordUseCase.execute({
+                usuarioId: req.user.userId,
+                passwordActual: actual,
+                passwordNueva: nueva,
+            });
+
+            // 204 y no 200: el cliente tiene que volver a loguearse igual,
+            // porque el cambio de clave revoca todas las sesiones
+            res.status(204).send();
+        } catch (error) {
+            next(error);
+        }
+    };
 
     login = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
         try {
@@ -129,6 +159,7 @@ export class AuthController {
                 role: user.role,
                 area: user.area,
                 isActive: user.isActive,
+                primera_password: user.primeraPassword,
             });
         } catch (error) {
             next(error);

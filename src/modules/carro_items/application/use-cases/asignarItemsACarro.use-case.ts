@@ -8,6 +8,8 @@ import type {
     IVentaExternaPort,
     VentaExterna,
 } from "../../../ventas_log/domain/venta-externa.port.js";
+import { LoteMovimientos } from "../../../movimientos/application/service/lote-movimientos.js";
+import { Movimiento } from "../../../movimientos/domain/movimiento.domain.js";
 import { CarroItem } from "../../domain/carro-item.domain.js";
 import { sincronizarOcupacion } from "../service/sincronizar-ocupacion.js";
 import type {
@@ -94,6 +96,8 @@ export class AsignarItemsACarroUseCase{
 
             const aGuardar:CarroItem[] = [];
             const asignados:ItemAsignadoDto[] = [];
+            const lote = new LoteMovimientos(this.idGen, usuarioId);
+            const movimientos:Movimiento[] = [];
 
             for(const solicitado of solicitados){
                 const itemDB2 = itemsDB2.get(solicitado.nroItem);
@@ -151,6 +155,25 @@ export class AsignarItemsACarroUseCase{
 
                 aGuardar.push(fila);
 
+                // una linea de bitacora por item cargado, todas con el mismo
+                // loteId para que el dashboard las muestre como una sola carga
+                movimientos.push(Movimiento.carga(
+                    lote.ctx(),
+                    {id:carro.id, nroCarro:carro.nroCarro},
+                    {
+                        codVenta,
+                        nroItem: solicitado.nroItem,
+                        codItem: fila.codItem,
+                        cantidad: solicitado.cantidad,
+                    },
+                    {
+                        marca_pieza: fila.marcaPieza,
+                        dimensiones: fila.dimensiones(),
+                        cantidad_en_el_carro_despues: fila.cantidadAsignada,
+                        cantidad_total_item: fila.cantidadTotalItem,
+                    },
+                ));
+
                 // se actualiza el acumulado en memoria por si el mismo lote
                 // trae dos lineas del mismo item
                 asignadas.set(solicitado.nroItem, yaAsignada + solicitado.cantidad);
@@ -167,6 +190,7 @@ export class AsignarItemsACarroUseCase{
             }
 
             await uow.carroItems.saveMuchos(aGuardar);
+            await uow.movimientos.registrarMuchos(movimientos);
 
             // el carro pasa a EN_USO. La ocupacion la maneja el sistema,
             // el estado (LLENO) lo sigue decidiendo el operario

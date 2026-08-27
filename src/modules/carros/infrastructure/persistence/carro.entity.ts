@@ -6,17 +6,20 @@ import { CarroItemsEntity } from "../../../carro_items/infrastructure/persistenc
 
 @Entity("carros")
 export class CarroEntity{
-    // el id lo genera el dominio con UuidAdapter, igual que en usuarios,
-    // asi que es PrimaryColumn y no PrimaryGeneratedColumn
-    @PrimaryColumn({type:"uuid"})
+    // varchar(36) y no uniqueidentifier: SQL Server devuelve los GUID en
+    // MAYUSCULAS y romperia las comparaciones de strings en JS
+    @PrimaryColumn({type:"varchar",length:36})
     id!:string;
 
     @Column({type:"int",unique:true})
     nro_carro!:number;
 
+    // SQL Server no tiene enum nativo: simple-enum lo guarda como varchar
+    // y TypeORM agrega el CHECK con los valores validos
+
     // lo decide el operario
     @Column({
-        type:"enum",
+        type:"simple-enum",
         enum:EstadoCarro,
         default:EstadoCarro.DISPONIBLE
     })
@@ -24,22 +27,23 @@ export class CarroEntity{
 
     // lo calcula el sistema a partir de carro_items
     @Column({
-        type:"enum",
+        type:"simple-enum",
         enum:OcupacionCarro,
         default:OcupacionCarro.VACIO
     })
     ocupacion!:OcupacionCarro;
 
     @Column({
-        type:"enum",
+        type:"simple-enum",
         enum:UbicacionCarro,
     })
     ubicacion_carro!:UbicacionCarro;
 
-    @CreateDateColumn({name:"creado_en",type:"timestamp"})
+    // datetime2: "timestamp" en SQL Server es rowversion binario, no una fecha
+    @CreateDateColumn({name:"creado_en",type:"datetime2"})
     creadoEn!:Date;
 
-    @UpdateDateColumn({name:"actualizado_en",type:"timestamp"})
+    @UpdateDateColumn({name:"actualizado_en",type:"datetime2"})
     actualizadoEn!:Date;
 
     @OneToMany(()=>CarroItemsEntity,(item)=>item.carro)

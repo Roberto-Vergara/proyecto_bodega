@@ -2,16 +2,22 @@ import { Column, CreateDateColumn, Entity, Index, PrimaryColumn, UpdateDateColum
 import { Area, UserRole } from "../../domain/user.domain.js";
 
 
-
 @Entity("usuarios")
 export class UserEntity{
-    @PrimaryColumn({type:"uuid"})
+    // varchar(36) y no uniqueidentifier a proposito: SQL Server devuelve los
+    // GUID en MAYUSCULAS, y nosotros los generamos en minusculas con uuid v4.
+    // Ese ida y vuelta rompe cualquier comparacion de strings en JS (===, o
+    // buscar en un Map por id). Con varchar el id que guardamos es el mismo
+    // que leemos, byte por byte
+    @PrimaryColumn({type:"varchar",length:36})
     id!:string;
 
-    @Column("varchar",{length:100})
+    // nvarchar en vez de varchar: los nombres llevan tildes y ñ, y asi no
+    // dependemos de la collation que tenga el servidor
+    @Column("nvarchar",{length:100})
     nombre!:string;
 
-    @Column("varchar",{length:100})
+    @Column("nvarchar",{length:100})
     apellido!:string;
 
     // unico a nivel de base de datos: es la ultima linea de defensa contra emails repetidos
@@ -20,14 +26,17 @@ export class UserEntity{
     @Column("varchar",{length:150})
     email!:string;
 
+    // el hash de bcrypt es ASCII puro
     @Column("varchar",{length:256})
     passHash!:string;
 
-    @Column("boolean",{default:true})
+    @Column("bit",{default:true})
     primera_password!:boolean;
 
+    // SQL Server no tiene tipo enum. "simple-enum" lo guarda como varchar y
+    // TypeORM crea el CHECK constraint con los valores validos
     @Column({
-        type:"enum",
+        type:"simple-enum",
         enum:UserRole,
         default:UserRole.EMPLOYEE
     })
@@ -37,19 +46,21 @@ export class UserEntity{
     @Column({
         // estaba apuntando a UserRole por copy/paste: la columna area guardaba
         // los valores del enum equivocado
-        type:"enum",
+        type:"simple-enum",
         enum:Area,
         default:Area.GENERAL
     })
     area!:Area;
 
-    @Column("boolean",{default:true})
+    @Column("bit",{default:true})
     isActive!:boolean
 
-    @CreateDateColumn({name:"creado_en",type:"timestamp"})
+    // datetime2 y NO timestamp: en SQL Server "timestamp" es un rowversion
+    // binario, no una fecha. Es una de las trampas clasicas al migrar
+    @CreateDateColumn({name:"creado_en",type:"datetime2"})
     creadoEn!:Date;
 
-    @UpdateDateColumn({ name: "actualizado_en", type: "timestamp" })
+    @UpdateDateColumn({ name: "actualizado_en", type: "datetime2" })
     actualizadoEn!: Date;
 
 }

@@ -1,5 +1,6 @@
 import type { ICarroItemRepository } from "../../carro_items/domain/carro-item.repository.js";
 import type { ICarroRepository } from "../../carros/domain/carro.repository.js";
+import type { IMovimientoRepository } from "../../movimientos/domain/movimiento.repository.js";
 import type { IVentaLogRepository } from "../../ventas_log/domain/venta-log.repository.js";
 
 
@@ -14,6 +15,9 @@ export interface UnitOfWork{
     ventas:IVentaLogRepository;
     carroItems:ICarroItemRepository;
     carros:ICarroRepository;
+    // la bitacora va en la MISMA transaccion que la operacion: si la accion
+    // se revierte, su movimiento tambien. No puede haber uno sin el otro
+    movimientos:IMovimientoRepository;
 }
 
 export interface IUnitOfWorkRunner{

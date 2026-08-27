@@ -17,6 +17,14 @@ export interface EnvConfig{
     DB_USERNAME:string;
     DB_PASSWORD:string;
     DB_NAME:string;
+    // SQL Server 2012 es viejo: no negocia el TLS que exige node por defecto.
+    // En una red interna se deja encrypt=false; si se prende, hay que confiar
+    // en el certificado autofirmado del servidor
+    DB_ENCRYPT:boolean;
+    DB_TRUST_SERVER_CERTIFICATE:boolean;
+    // cuantos proxies hay delante (Cloudflare = 1, Cloudflare + nginx = 2).
+    // 0 = sin proxy, se usa la IP del socket
+    TRUST_PROXY:number;
 }
 
 export const envConfig=():EnvConfig=>{
@@ -34,12 +42,15 @@ export const envConfig=():EnvConfig=>{
         ISPRODUCTION:isProduction,
         HOST:process.env.HOST || "localhost",
         PORT:Number(process.env.PORT) || 3000,
-        // database config
+        // database config (SQL Server)
         DB_HOST:process.env.DB_HOST || "localhost",
-        DB_PORT:Number(process.env.DB_PORT) || 3306,
-        DB_USERNAME:process.env.DB_USERNAME || "test",
-        DB_PASSWORD:process.env.DB_PASSWORD || "test",
-        DB_NAME:process.env.DB_NAME || "test"
+        DB_PORT:Number(process.env.DB_PORT) || 1433,
+        DB_USERNAME:process.env.DB_USERNAME || "",
+        DB_PASSWORD:process.env.DB_PASSWORD || "",
+        DB_NAME:process.env.DB_NAME || "bodega_app",
+        DB_ENCRYPT:process.env.DB_ENCRYPT === "true",
+        DB_TRUST_SERVER_CERTIFICATE:process.env.DB_TRUST_SERVER_CERTIFICATE !== "false",
+        TRUST_PROXY:Number(process.env.TRUST_PROXY) || 0,
     }
 }
 

@@ -26,6 +26,7 @@ export class UserRepositoryImpl implements IUserRepository{
             role:user.role,
             area:user.area,
             isActive:user.isActive,
+            primera_password:user.primeraPassword,
         });
     }
 
@@ -64,6 +65,7 @@ export class UserRepositoryImpl implements IUserRepository{
         entity.role = user.role;
         entity.area = user.area;
         entity.isActive = user.isActive;
+        entity.primera_password = user.primeraPassword;
         return entity;
     }
 
@@ -77,6 +79,7 @@ export class UserRepositoryImpl implements IUserRepository{
             role:entity.role,
             area:entity.area,
             isActive:entity.isActive,
+            primeraPassword:entity.primera_password,
             createdAt:entity.creadoEn,
             updatedAt:entity.actualizadoEn,
         });

@@ -32,7 +32,20 @@
     // "noUnusedParameters": true,
     // "noFallthroughCasesInSwitch": true,
     // "noPropertyAccessFromIndexSignature": true,
-    "emitDecoratorMetadata": true,
+    // emitDecoratorMetadata DEBE quedar apagado.
+    //
+    // Genera __metadata("design:type", CarroEntity), que EVALUA la clase en el
+    // momento de definir la entidad. Como carros <-> carro_items y
+    // ventas_log <-> carro_items se importan mutuamente, en ESM una de las dos
+    // todavia esta sin inicializar y revienta con:
+    //   ReferenceError: Cannot access 'CarroEntity' before initialization
+    //
+    // No hace falta: todas las columnas declaran su "type" a mano y todas las
+    // relaciones usan la forma () => Entity, asi que TypeORM nunca necesita la
+    // metadata reflejada. Ademas esbuild (el que usa tsx en dev) tampoco la
+    // emite, asi que tenerlo prendido hacia que dev y build compilaran distinto
+    // y el error solo aparecia al hacer el build.
+    "emitDecoratorMetadata": false,
     "experimentalDecorators": true,
 
     // Recommended Options

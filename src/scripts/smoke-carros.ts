@@ -1,28 +1,35 @@
 import "dotenv/config";
-import pg from "pg";
+import sql from "mssql";
 
 /**
  * Prueba de humo del flujo de carros, contra el servidor corriendo de verdad.
  *
- * Se hace por HTTP y contra el postgres real (y no con repos en memoria) a
- * proposito: lo que mas puede fallar aca es SQL — el indice unico parcial que
- * evita filas duplicadas y el SELECT ... FOR UPDATE que evita la
- * sobre-asignacion. Un doble en memoria no probaria ninguna de las dos cosas.
+ * Se hace por HTTP y contra el SQL Server real (y no con repos en memoria) a
+ * proposito: lo que mas puede fallar aca es SQL — el indice filtrado que evita
+ * filas duplicadas y el WITH (UPDLOCK) que evita la sobre-asignacion. Un doble
+ * en memoria no probaria ninguna de las dos cosas.
  *
  * Requiere el servidor arriba con VENTAS_SOURCE=fake:
  *   pnpm dev
  *   pnpm smoke:carros
  */
 
-const BASE = process.env.SMOKE_BASE_URL ?? "http://127.0.0.1:3214";
+// el puerto sale del .env, no fijo: si cambia PORT, el script lo sigue
+const BASE = process.env.SMOKE_BASE_URL
+    ?? `http://127.0.0.1:${process.env.PORT ?? 3000}`;
 const EMAIL = process.env.SMOKE_EMAIL ?? "admin@bodega.cl";
 const PASSWORD = process.env.SMOKE_PASSWORD ?? "Admin1234";
 
 // numeros altos para no pisarse con los carros de verdad de la planta
 const CARRO_A = 9001;
 const CARRO_B = 9002;
-const VENTA = 777777;
-const VENTA_OTRA = 888888;
+
+// ventas exclusivas del script (solo existen en el adapter fake).
+// NO se usa la 777777 a proposito: es una nota de venta real y alguien puede
+// estar probandola a mano. limpiar() borra las asignaciones de estas ventas en
+// TODOS los carros, asi que tienen que ser de uso exclusivo del test
+const VENTA = 999001;
+const VENTA_OTRA = 999002;
 
 let token = "";
 let fallos = 0;
@@ -54,48 +61,67 @@ async function api(
  * Deja la base como si el script nunca hubiera corrido.
  *
  * Borra las asignaciones de las dos ventas de prueba en CUALQUIER carro, no
- * solo en los del script: si no, una corrida anterior (o una prueba a mano)
- * deja unidades tomadas y el script falla por datos sucios, no por un bug.
+ * solo en los del script: si no, una corrida anterior deja unidades tomadas y
+ * el script falla por datos sucios en vez de por un bug.
  *
- * Por eso mismo main() se niega a correr si la fuente no es "fake": contra
- * DB2 la 777777 es una orden de verdad y esto seria destructivo.
+ * Justamente por ese alcance, las ventas del script son exclusivas suyas
+ * (999001 / 999002). Al principio usaba la 777777 y borraba el trabajo de
+ * quien estuviera probando a mano esa nota de venta.
  */
 async function limpiar(): Promise<void> {
-    const client = new pg.Client({
-        host: process.env.DB_HOST,
-        port: Number(process.env.DB_PORT),
+    const pool = await sql.connect({
+        server: process.env.DB_HOST ?? "localhost",
+        port: Number(process.env.DB_PORT) || 1433,
         user: process.env.DB_USERNAME,
         password: process.env.DB_PASSWORD,
         database: process.env.DB_NAME,
+        options: {
+            encrypt: process.env.DB_ENCRYPT === "true",
+            trustServerCertificate: process.env.DB_TRUST_SERVER_CERTIFICATE !== "false",
+            enableArithAbort: true,
+            // SQL Server 2012 no habla TLS 1.2
+            cryptoCredentialsDetails: { minVersion: "TLSv1" },
+        },
     });
 
-    await client.connect();
-    await client.query(`DELETE FROM carro_items WHERE cod_venta = ANY($1)`, [[VENTA, VENTA_OTRA]]);
-    await client.query(
-        `DELETE FROM carro_items WHERE carro_id IN (SELECT id FROM carros WHERE nro_carro = ANY($1))`,
-        [[CARRO_A, CARRO_B]],
-    );
-    await client.query(`DELETE FROM carros WHERE nro_carro = ANY($1)`, [[CARRO_A, CARRO_B]]);
+    const ventas = `(${VENTA}, ${VENTA_OTRA})`;
+    const carros = `(${CARRO_A}, ${CARRO_B})`;
 
-    // ocupacion es un cache de lo que hay en carro_items, y el DELETE de arriba
-    // es SQL crudo: se salta sincronizarOcupacion(). Si no lo arreglamos aca,
-    // dejamos carros marcados EN_USO sin un solo vidrio adentro
-    // postgres no convierte text a enum solo: hay que castear
-    await client.query(`
-        UPDATE carros c SET
-            ocupacion = (CASE WHEN EXISTS (
+    // la bitacora primero: apunta a los carros que vamos a borrar
+    await pool.request().query(`DELETE FROM movimientos_carro WHERE cod_venta IN ${ventas}`);
+    await pool.request().query(
+        `DELETE FROM movimientos_carro
+         WHERE carro_id IN (SELECT id FROM carros WHERE nro_carro IN ${carros})
+            OR carro_destino_id IN (SELECT id FROM carros WHERE nro_carro IN ${carros})`,
+    );
+
+    await pool.request().query(`DELETE FROM carro_items WHERE cod_venta IN ${ventas}`);
+    await pool.request().query(
+        `DELETE FROM carro_items WHERE carro_id IN (SELECT id FROM carros WHERE nro_carro IN ${carros})`,
+    );
+    await pool.request().query(`DELETE FROM carros WHERE nro_carro IN ${carros}`);
+
+    // ocupacion es un cache de lo que hay en carro_items, y los DELETE de arriba
+    // son SQL crudo: se saltan sincronizarOcupacion(). Si no lo arreglamos aca,
+    // dejamos carros marcados EN_USO sin un solo vidrio adentro.
+    // En SQL Server los enums son varchar con CHECK, asi que no hay que castear
+    // nada (en postgres si habia que hacerlo)
+    await pool.request().query(`
+        UPDATE c SET
+            ocupacion = CASE WHEN EXISTS (
                 SELECT 1 FROM carro_items ci
                 WHERE ci.carro_id = c.id AND ci.despachado_en IS NULL
-            ) THEN 'en_uso' ELSE 'vacio' END)::carros_ocupacion_enum,
-            estado_carro = (CASE
+            ) THEN 'en_uso' ELSE 'vacio' END,
+            estado_carro = CASE
                 WHEN c.estado_carro = 'lleno' AND NOT EXISTS (
                     SELECT 1 FROM carro_items ci
                     WHERE ci.carro_id = c.id AND ci.despachado_en IS NULL
                 ) THEN 'disponible'
-                ELSE c.estado_carro::text END)::carros_estado_carro_enum
+                ELSE c.estado_carro END
+        FROM carros c
     `);
 
-    await client.end();
+    await pool.close();
 }
 
 async function main(): Promise<void> {
@@ -108,8 +134,9 @@ async function main(): Promise<void> {
 
     if (salud.body?.ventas_source !== "fake") {
         throw new Error(
-            "Este script borra las asignaciones de las ventas 777777 y 888888, que contra DB2 son " +
-            "ordenes reales. Levanta el servidor con VENTAS_SOURCE=fake para poder correrlo.",
+            `Este script borra las asignaciones de las ventas ${VENTA} y ${VENTA_OTRA} en todos los ` +
+            "carros. Esas ventas solo existen en el adapter fake; contra DB2 el codigo podria " +
+            "chocar con una orden real. Levanta el servidor con VENTAS_SOURCE=fake.",
         );
     }
 
@@ -291,6 +318,101 @@ async function main(): Promise<void> {
     r = await api("GET", `/ventas/${VENTA_OTRA}`);
     check("una venta nunca despachada no lleva aviso",
         r.body.ya_despachada === false && r.body.avisos.length === 0, r.body.avisos);
+
+    // ---- vaciar ----
+
+    r = await api("POST", `/carros/${idB}/items`, {
+        codVenta: VENTA, items: [{ nroItem: 1, cantidad: 5 }, { nroItem: 2, cantidad: 3 }],
+    });
+    check("se vuelve a cargar el carro B para probar el vaciado", r.status === 201, r.body);
+
+    r = await api("POST", `/carros/${idB}/vaciar`, { motivo: "prueba de humo" });
+    check("vaciar responde 200", r.status === 200, r.body);
+    check("vaciar devuelve lo que HABIA adentro",
+        r.body.piezas_retiradas === 33 && r.body.lineas_retiradas === 3, r.body);
+    check("el contenido devuelto trae los datos del vidrio",
+        r.body.contenido.every((c: any) => c.cod_item && c.dimensiones && c.estado_item),
+        r.body.contenido);
+
+    r = await api("GET", `/carros/${idB}`);
+    check("el carro vaciado queda en VACIO",
+        r.body.ocupacion === "vacio" && r.body.total_piezas_cargadas === 0, r.body);
+
+    r = await api("POST", `/carros/${idB}/vaciar`, {});
+    check("vaciar un carro ya vacio da 409", r.status === 409, r.body);
+
+    r = await api("GET", `/ventas/${VENTA}`);
+    check("lo vaciado vuelve a estar disponible en la venta",
+        r.body.items.find((i: any) => i.nro_item === 1)?.disponible === 17, r.body.items);
+
+    // ---- la bitacora ----
+
+    r = await api("GET", `/carros/${idB}/movimientos`);
+    const tipos = new Set<string>(r.body.movimientos.map((m: any) => m.tipo));
+    check("el historial del carro registra el alta", tipos.has("carro_creado"), [...tipos]);
+    check("...las cargas", tipos.has("carga"), [...tipos]);
+    check("...los movimientos donde fue ORIGEN y donde fue DESTINO",
+        tipos.has("movimiento"), [...tipos]);
+    check("...el vaciado", tipos.has("vaciado"), [...tipos]);
+    check("...el despacho", tipos.has("despacho"), [...tipos]);
+    check("cada movimiento dice quien lo hizo",
+        r.body.movimientos.every((m: any) => m.usuario_nombre !== null), r.body.movimientos[0]);
+    check("cada movimiento trae una descripcion lista para mostrar",
+        r.body.movimientos.every((m: any) => typeof m.descripcion === "string" && m.descripcion.length > 0),
+        r.body.movimientos[0]);
+
+    const vaciados = r.body.movimientos.filter((m: any) => m.tipo === "vaciado");
+    check("las lineas de un mismo vaciado comparten lote_id",
+        vaciados.length === 3 && new Set(vaciados.map((m: any) => m.lote_id)).size === 1,
+        vaciados.map((m: any) => m.lote_id));
+    check("el motivo queda guardado en el detalle",
+        vaciados.every((m: any) => m.detalle?.motivo === "prueba de humo"), vaciados[0]?.detalle);
+
+    r = await api("GET", `/carros/${idA}/movimientos?tipo=cambio_estado`);
+    check("se puede filtrar el historial por tipo",
+        r.body.movimientos.length > 0 && r.body.movimientos.every((m: any) => m.tipo === "cambio_estado"),
+        r.body.movimientos);
+    check("el cambio de estado guarda el valor anterior y el nuevo",
+        r.body.movimientos.every((m: any) => m.detalle?.estado_anterior && m.detalle?.estado_nuevo),
+        r.body.movimientos[0]?.detalle);
+
+    r = await api("GET", `/ventas/${VENTA}/movimientos`);
+    check("el historial por venta trae solo esa venta",
+        r.body.total > 0 && r.body.movimientos.every((m: any) => m.cod_venta === VENTA),
+        r.body.total);
+
+    r = await api("GET", `/movimientos?limite=5`);
+    check("la bitacora general pagina", r.body.movimientos.length <= 5 && r.body.total >= 5, {
+        n: r.body.movimientos.length, total: r.body.total,
+    });
+
+    r = await api("GET", `/movimientos?tipo=basura`);
+    check("un tipo invalido da 400", r.status === 400, r.body);
+
+    // ---- ventas en proceso: la entrada del dashboard ----
+
+    r = await api("POST", `/carros/${idA}/items`, {
+        codVenta: VENTA, items: [{ nroItem: 2, cantidad: 4 }],
+    });
+    check("se carga algo para tener una venta en proceso", r.status === 201, r.body);
+
+    r = await api("GET", "/ventas");
+    check("GET /ventas responde una lista", r.status === 200 && Array.isArray(r.body), r.body);
+
+    const enProceso = (r.body as any[]).find((v) => v.cod_venta === VENTA);
+    check("la venta cargada aparece en el listado", enProceso !== undefined, r.body);
+    check("el listado trae cliente, piezas y carros",
+        enProceso?.nom_cliente !== null
+        && enProceso?.piezas_en_carros === 4
+        && enProceso?.carros === 1,
+        enProceso);
+
+    r = await api("POST", `/carros/${idA}/vaciar`, {});
+    check("se vacia el carro", r.status === 200, r.body);
+
+    r = await api("GET", "/ventas");
+    check("una venta sin nada cargado sale del listado",
+        (r.body as any[]).every((v) => v.cod_venta !== VENTA), r.body);
 
     await limpiar();
 

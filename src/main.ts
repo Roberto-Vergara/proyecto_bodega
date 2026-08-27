@@ -9,7 +9,7 @@ import { AppDataSource } from "./modules/shared/infrastructure/database/data-sou
 import helmet from "helmet";
 import { errorHandler } from "./modules/shared/infrastructure/http/error-handler.middleware.js";
 import { notFoundHandler } from "./modules/shared/infrastructure/http/not-found.middleware.js";
-import { refreshTokenRepository } from "./modules/shared/infrastructure/container.js";
+import { reconciliarOcupacionesUseCase, refreshTokenRepository } from "./modules/shared/infrastructure/container.js";
 
 
 // rutas
@@ -17,8 +17,9 @@ import carroRoutes from "./modules/carros/infrastructure/http/carro.route.js";
 import authRoutes from "./modules/auth/infrastructure/http/auth.route.js";
 import userRoutes from "./modules/users/infrastructure/http/user.route.js";
 import ventaRoutes from "./modules/ventas_log/infrastructure/http/venta.route.js";
+import movimientoRoutes from "./modules/movimientos/infrastructure/http/movimiento.route.js";
 
-const { PORT, HOST,ISPRODUCTION } = envConfig();
+const { PORT, HOST,ISPRODUCTION,TRUST_PROXY } = envConfig();
 
 const app = express();
 
@@ -71,9 +72,16 @@ const main = async (): Promise<void> => {
         app.use(helmet({hsts:false}))
     }
 
-    // necesario para que req.ip sea la IP real del cliente cuando haya un proxy
-    // delante (nginx, etc). El rate limit del login depende de esto
-    app.set("trust proxy", 1);
+    // Detras de Cloudflare, TODAS las peticiones llegan con la IP de Cloudflare.
+    // Si no confiamos en el proxy, req.ip es siempre la misma y el rate limit
+    // del login pasa de ser "por usuario" a ser global: 10 intentos fallidos de
+    // cualquiera y se bloquea la planta entera.
+    //
+    // TRUST_PROXY dice cuantos saltos de proxy hay antes de nosotros. Es un
+    // numero y no "true" a proposito: confiar en toda la cadena deja que
+    // cualquiera falsee su IP mandando un X-Forwarded-For inventado y se salte
+    // el limite. Cloudflare solo -> 1. Cloudflare + nginx -> 2.
+    app.set("trust proxy", TRUST_PROXY);
 
     app.use(express.json({ limit: "100kb" }));
 
@@ -87,6 +95,7 @@ const main = async (): Promise<void> => {
     app.use("/auth",authRoutes);
     app.use("/users",userRoutes);
     app.use("/ventas",ventaRoutes);
+    app.use("/movimientos",movimientoRoutes);
 
     // ruta inexistente -> 404 en json, no el html feo por defecto de express
     app.use(notFoundHandler);
@@ -113,6 +122,18 @@ const main = async (): Promise<void> => {
             console.error("[AUTH] Error limpiando refresh tokens:", error);
         }
     };
+
+    // la ocupacion de los carros es un cache de carro_items. Si alguien toco la
+    // base a mano, aca queda derecho antes de atender la primera peticion
+    try {
+        const corregidos = await reconciliarOcupacionesUseCase.execute();
+        if (corregidos > 0) {
+            console.log(`[CARROS] ${corregidos} carros tenian la ocupacion desincronizada, corregidos`);
+        }
+    } catch (error) {
+        // que no impida arrancar: es una correccion, no un requisito
+        console.error("[CARROS] No se pudo reconciliar la ocupacion:", error);
+    }
 
     void limpiarTokens();
     const intervaloLimpieza = setInterval(() => void limpiarTokens(), LIMPIEZA_TOKENS_MS);

@@ -1,3 +1,5 @@
+import { ValidationError } from "../../../shared/domain/errors.js";
+
 
 
 
@@ -6,17 +8,17 @@ export class NameVO{
     
     static create(raw: string, campo = "nombre"): NameVO {
         if (typeof raw !== "string" || raw.trim() === "") {
-            throw new Error(`El ${campo} es obligatorio`);
+            throw new ValidationError(`El ${campo} es obligatorio`);
         }
 
         const limpio = raw.trim().replace(/\s+/g, " ");
 
         if (limpio.length < 2) {
-            throw new Error(`El ${campo} debe tener al menos 2 caracteres`);
+            throw new ValidationError(`El ${campo} debe tener al menos 2 caracteres`);
         }
 
         if (limpio.length > 100) {
-            throw new Error(`El ${campo} no puede superar los 100 caracteres`);
+            throw new ValidationError(`El ${campo} no puede superar los 100 caracteres`);
         }
 
         return new NameVO(limpio);

@@ -4,6 +4,33 @@ const {AS400_CONN_STRING,AS400_CONNECT_TIMEOUT_S,AS400_QUERY_TIMEOUT_MS,AS400_SC
 
 const EXCLUIR_DESPACHO = "DESPACHO       ";
 
+/**
+ * Antepone la libreria a un nombre de tabla del AS400.
+ *
+ * Es obligatorio: el DSN usa SQL naming (Naming=0), y en ese modo una tabla
+ * SIN calificar se busca en el esquema que se llama igual que el usuario de
+ * conexion. Con el usuario INFMMC, "FROM FOMHDR" termina buscando
+ * INFMMC.FOMHDR y responde:
+ *
+ *   SQL0204 - FOMHDR en INFMMC de tipo *FILE no encontrado
+ *
+ * En una maquina puede funcionar igual si el DSN trae DefaultLibraries
+ * configurado, y en otra no. Calificando en la consulta el comportamiento es
+ * el mismo en todos lados y no depende de como este armado el odbc.ini.
+ */
+function tabla(nombre:string):string{
+    if(AS400_SCHEMA.trim() === ""){
+        throw new Error(
+            "Falta AS400_LIBRARY en el .env: sin libreria, las consultas al AS400 " +
+            "se resuelven contra el esquema del usuario y fallan con SQL0204",
+        );
+    }
+
+    // punto y no barra porque el DSN usa SQL naming (Naming=0).
+    // Con system naming (Naming=1) el separador seria SANFPRD/FOMHDR
+    return `${AS400_SCHEMA}.${nombre}`;
+}
+
 // funcion auxiliar para agregar limite de tiempo
 // se hizo porque el db2 suele cortar la comunicacion pero no mata el socket
 // posiblemente pusieron un timeout, pero no mataron el socket
@@ -174,7 +201,7 @@ export async function findVenta(
                 "OHDAOR" AS "fecha_orden", 
                 "OHSHIN" AS "instrucciones", 
                 "OHTOT$" AS "monto_total" 
-            FROM FOMHDR 
+            FROM ${tabla("FOMHDR")} 
             WHERE "OHORDÑ" = ? 
             FETCH FIRST 1 ROWS ONLY`;
 
@@ -199,7 +226,7 @@ export async function findVenta(
                 "LIDIM3" AS "dim3", 
                 "LIQYOR" AS "cantidad", 
                 "LIMARK" AS "marca_pieza" 
-            FROM FOMDET 
+            FROM ${tabla("FOMDET")} 
             WHERE ${whereDetalle}`;
 
         const [cabecera, detalle] = await Promise.all([

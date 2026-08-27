@@ -15,6 +15,15 @@ export interface ResumenDespacho{
     ultimoDespacho:Date|null;
 }
 
+// una venta que tiene vidrios cargados en algun carro ahora mismo
+export interface VentaEnProceso{
+    codVenta:number;
+    piezasEnCarros:number;
+    lineas:number;
+    carros:number;
+    ultimaCarga:Date;
+}
+
 
 export interface ICarroItemRepository{
     save(item:CarroItem):Promise<void>;
@@ -43,6 +52,10 @@ export interface ICarroItemRepository{
 
     // en que carros esta repartido cada item de una venta. Clave: nro_item
     distribucionPorVenta(codVenta:number):Promise<Map<number,UbicacionDeItem[]>>;
+
+    // el dashboard necesita entrar por "que hay a medio cargar", no solo
+    // consultando una nota de venta que ya conoces
+    ventasEnProceso():Promise<VentaEnProceso[]>;
 
     // para avisar si una venta ya se despacho antes y alguien la esta
     // volviendo a cargar (reproceso legitimo o carga repetida por error)

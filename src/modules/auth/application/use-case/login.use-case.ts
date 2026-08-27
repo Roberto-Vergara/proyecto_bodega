@@ -49,6 +49,7 @@ export class LoginUseCase {
                 email: user.email,
                 role: user.role,
                 area: user.area,
+                primera_password: user.primeraPassword,
             },
         };
     }

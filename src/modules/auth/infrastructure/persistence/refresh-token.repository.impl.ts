@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { LessThan, type Repository } from "typeorm";
 
 import { AppDataSource } from "../../../shared/infrastructure/database/data-source.js";
@@ -19,6 +20,7 @@ export class RefreshTokenRepositoryImpl implements IRefreshTokenRepository{
 
     async save(input: SaveRefreshTokenInput): Promise<void> {
         const entity = this.repository.create({
+            id:randomUUID(),
             tokenHash:input.tokenHash,
             userId:input.userId,
             expiresAt:input.expiresAt,
